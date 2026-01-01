@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  profile       Profile?
+  services      Service[]
+  sentSwaps     Swap[]    @relation("SentSwaps")
+  receivedSwaps Swap[]    @relation("ReceivedSwaps")
+}
+
+model Profile {
+  id          String   @id @default(cuid())
+  bio         String?
+  location    String?
+  portfolio   Json?    // Stores portfolio items as JSON
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  category    String
+  images      String[] // URLs to images
+  isActive    Boolean  @default(true)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  swaps       Swap[]
+}
+
+model Swap {
+  id              String        @id @default(cuid())
+  status          SwapStatus    @default(PENDING)
+  message         String?
+  providerId      String
+  provider        User          @relation("SentSwaps", fields: [providerId], references: [id])
+  receiverId      String
+  receiver        User          @relation("ReceivedSwaps", fields: [receiverId], references: [id])
+  serviceId       String
+  service         Service       @relation(fields: [serviceId], references: [id])
+  offeredServices String[]      // IDs of services offered in exchange
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+enum SwapStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  COMPLETED
+}

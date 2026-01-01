@@ -1,0 +1,114 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow authenticated users to read and write their own user data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow read for profile pages
+      allow read: if request.auth != null;
+    }
+    
+    // Allow authenticated users to read and write their own profile data
+    match /profiles/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow read for profile pages
+      allow read: if request.auth != null;
+    }
+    
+    // Allow authenticated users to read all services and write their own services
+    match /services/{serviceId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null;
+    }
+    
+    // Allow authenticated users to read all swaps and write their own swaps
+    match /swaps/{swapId} {
+      // Make these rules more permissive for testing
+      allow read: if request.auth != null;
+      // Allow any authenticated user to create swaps without constraints
+      allow create: if request.auth != null;
+      // For update/delete operations, check existing resource
+      allow update, delete: if request.auth != null &&
+                    (resource.data.providerId == request.auth.uid || 
+                     resource.data.receiverId == request.auth.uid);
+    }
+    
+    // Allow users to read and write their own notifications
+    match /notifications/{notificationId} {
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null;
+    }
+    
+    // Allow users to read and write connection requests
+    match /connectionRequests/{requestId} {
+      allow read: if request.auth != null && 
+                  (request.auth.uid == resource.data.fromUserId || 
+                   request.auth.uid == resource.data.toUserId);
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && 
+                            (request.auth.uid == resource.data.fromUserId || 
+                             request.auth.uid == resource.data.toUserId);
+    }
+    
+    // Allow users to read and write connections
+    match /connections/{connectionId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+    
+    // Allow users to read and write their own reviews
+    match /reviews/{reviewId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.uid == resource.data.reviewerId;
+    }
+    
+    // Rules for posts and comments
+    match /profilePosts/{postId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.uid == resource.data.userId;
+      
+      // Nested collections for likes, comments, and reactions
+      match /likes/{likeId} {
+        allow read, write: if request.auth != null;
+      }
+      
+      match /emojiReactions/{reactionId} {
+        allow read, write: if request.auth != null;
+      }
+      
+      match /comments/{commentId} {
+        allow read, write: if request.auth != null;
+        
+        match /likes/{likeId} {
+          allow read, write: if request.auth != null;
+        }
+        
+        match /emojiReactions/{reactionId} {
+          allow read, write: if request.auth != null;
+        }
+        
+        match /replies/{replyId} {
+          allow read, write: if request.auth != null;
+          
+          match /likes/{likeId} {
+            allow read, write: if request.auth != null;
+          }
+          
+          match /emojiReactions/{reactionId} {
+            allow read, write: if request.auth != null;
+          }
+        }
+      }
+    }
+    
+    // Allow users to read and write endorsements
+    match /endorsements/{endorsementId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+  }
+} 

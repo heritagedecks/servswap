@@ -1,0 +1,3122 @@
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/app/context/AuthContext';
+import { db } from '@/app/lib/firebase';
+import { collection, query, where, getDocs, doc, getDoc, Firestore, Timestamp, orderBy, addDoc, serverTimestamp, deleteDoc, doc as firestoreDoc, setDoc } from 'firebase/firestore';
+import { getStorage, ref, listAll, getDownloadURL, ref as storageRef, uploadBytes, deleteObject } from 'firebase/storage';
+import Footer from '@/app/components/Footer';
+import Header from '@/app/components/Header';
+import { BadgeCheck, ThumbsUp, Smile, Trash2, Users as LucideUsers, UserPlus, Mail, UserCheck, Repeat } from "lucide-react";
+import { Image as LucideImage, Plus, ArrowDown, ArrowUp } from "lucide-react";
+import { createNotification } from '@/app/lib/notifications';
+
+interface UserService {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  location: string;
+  createdAt: Date;
+  images: string[];
+}
+
+interface PortfolioItem {
+  id: string;
+  title: string;
+  description: string;
+  imageUrl: string;
+}
+
+interface ProfileData {
+  userId?: string;
+  bio?: string;
+  location?: string;
+  skills?: string[];
+  portfolio?: PortfolioItem[];
+  bannerImage?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+interface UserProfile {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL: string;
+  bio?: string;
+  location?: string;
+  bannerImage?: string;
+  joinedDate: Date;
+  skills?: string[];
+  portfolio?: PortfolioItem[];
+}
+
+interface UserData {
+  displayName?: string;
+  photoURL?: string;
+  email?: string;
+}
+
+interface PostData {
+  userId: string;
+  content: string;
+  createdAt: any;
+  imageUrl?: string;
+  linkPreview?: any;
+}
+
+interface Endorsement {
+  id: string;
+  fromUserId: string;
+  fromUserName: string;
+  swapId: string;
+  swapTitle: string;
+  review: string;
+  rating: number;
+  createdAt: Date;
+  fromUserPhoto?: string;
+}
+
+interface CompletedSwap {
+  id: string;
+  title: string;
+  completedAt: Date;
+}
+
+interface Post {
+  id: string;
+  userId: string;
+  content: string;
+  createdAt: any;
+  displayName: string;
+  photoURL: string;
+  likes: string[];
+  emoji: { [key: string]: string[] };
+  comments: Comment[];
+}
+
+interface Comment {
+  id: string;
+  userId: string;
+  text: string;
+  createdAt: any;
+  displayName: string;
+  photoURL: string;
+  likes: string[];
+  emoji: { [key: string]: string[] };
+  replies: Reply[];
+}
+
+interface Reply {
+  id: string;
+  userId: string;
+  text: string;
+  createdAt: any;
+  displayName: string;
+  photoURL: string;
+  likes?: string[];
+  emoji?: { [key: string]: string[] };
+}
+
+interface Swap {
+  id: string;
+  title: string;
+  participants: string[];
+  completedAt: Date;
+}
+
+export default function UserProfilePage() {
+  const params = useParams();
+  const userId = params.userId as string;
+  const router = useRouter();
+  const { user } = useAuth();
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [userServices, setUserServices] = useState<UserService[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [userInfo, setUserInfo] = useState<any>(null);
+  const [profileImage, setProfileImage] = useState<string>("");
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [feedPosts, setFeedPosts] = useState<any[]>([]);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const [showPostModal, setShowPostModal] = useState(false);
+  const [newPostContent, setNewPostContent] = useState('');
+  const [posting, setPosting] = useState(false);
+  const [newPostImage, setNewPostImage] = useState<File | null>(null);
+  const [newPostImagePreview, setNewPostImagePreview] = useState<string | null>(null);
+  const [newPostLinkPreview, setNewPostLinkPreview] = useState<any>(null);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const isOwnProfile = user && user.uid === userId;
+  const [maximizedImage, setMaximizedImage] = useState<string | null>(null);
+  const [feedPage, setFeedPage] = useState(0);
+  const POSTS_PER_PAGE = 3;
+  const feedContainerRef = useRef<HTMLDivElement>(null);
+  const [postInteractions, setPostInteractions] = useState<{ [postId: string]: any }>({});
+  const [commentInputs, setCommentInputs] = useState<{ [postId: string]: string }>({});
+  const [showEmojiPicker, setShowEmojiPicker] = useState<{ [postId: string]: boolean }>({});
+  const emojiList = ["👍", "🔥", "😂", "😍", "🎉", "😮", "😢", "👏", "💯"];
+  const [commentInteractions, setCommentInteractions] = useState<{ [commentId: string]: any }>({});
+  const [replyInputs, setReplyInputs] = useState<{ [commentId: string]: string }>({});
+  const [showReplyBox, setShowReplyBox] = useState<{ [commentId: string]: boolean }>({});
+  const [showCommentEmojiPicker, setShowCommentEmojiPicker] = useState<{ [commentId: string]: boolean }>({});
+  const [showReplyEmojiPicker, setShowReplyEmojiPicker] = useState<{ [replyId: string]: boolean }>({});
+  const [showAllComments, setShowAllComments] = useState<{ [postId: string]: boolean }>({});
+  const [showComments, setShowComments] = useState<{ [postId: string]: boolean }>({});
+  const [showEndorseModal, setShowEndorseModal] = useState(false);
+  const [completedSwaps, setCompletedSwaps] = useState<CompletedSwap[]>([]);
+  const [selectedSwap, setSelectedSwap] = useState<string>('');
+  const [endorsementReview, setEndorsementReview] = useState('');
+  const [endorsements, setEndorsements] = useState<Endorsement[]>([]);
+  const [isEndorsing, setIsEndorsing] = useState(false);
+  const [endorsementRating, setEndorsementRating] = useState<number>(0);
+  const [hoveredRating, setHoveredRating] = useState<number>(0);
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+  const reviewsPerPage = 3;
+  const searchParams = useSearchParams();
+  const postId = searchParams.get('postId');
+  const [connectionsCount, setConnectionsCount] = useState<number>(0);
+  const [totalSwapsCount, setTotalSwapsCount] = useState<number>(0);
+  const [connectionsModalOpen, setConnectionsModalOpen] = useState(false);
+  const [profileConnections, setProfileConnections] = useState<any[]>([]);
+  const [viewerConnections, setViewerConnections] = useState<any[]>([]);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [mutualConnections, setMutualConnections] = useState<string[]>([]);
+  const [connectionsUserInfo, setConnectionsUserInfo] = useState<{[uid: string]: any}>({});
+  const [connectionsTab, setConnectionsTab] = useState<'all' | 'mutual'>('all');
+
+  // Add this check function near the other state declarations
+  const hasEndorsedSwap = (swapId: string) => {
+    return endorsements.some(e => e.swapId === swapId);
+  };
+
+  useEffect(() => {
+    if (!user) return; // Only fetch if logged in
+    const fetchUserData = async () => {
+      setLoading(true);
+      
+      try {
+        const userDocRef = doc(db as Firestore, 'users', userId);
+        const userDocSnap = await getDoc(userDocRef);
+        
+        if (userDocSnap.exists()) {
+          const userData = userDocSnap.data();
+          
+          setUserInfo(userData);
+          console.log('User data fetched:', userData);
+          
+          // Enhanced profile image handling logic
+          if (userData.photoURL) {
+            console.log('Using photoURL from user data:', userData.photoURL);
+            setProfileImage(userData.photoURL);
+          } else {
+            // If no photoURL in user data, look in profile-images directory
+            try {
+              console.log('No photoURL found, trying Firebase Storage');
+              const storage = getStorage();
+              
+              // This matches the exact path structure used in the dashboard profile page
+              // The userId is the target user's ID from the URL parameter
+              const profileImagesPath = `profile-images/${userId}`;
+              console.log('Looking for profile images at path:', profileImagesPath);
+              const profileImagesRef = ref(storage, profileImagesPath);
+              
+              // List all profile images for this user
+              listAll(profileImagesRef)
+                .then((result) => {
+                  console.log(`Found ${result.items.length} profile images for user ${userId}`);
+                  
+                  if (result.items.length > 0) {
+                    // Sort items by name to get the most recent one (matching the "profile-${Date.now()}.jpg" pattern)
+                    const sortedItems = [...result.items].sort((a, b) => {
+                      // Extract timestamp from filename if possible
+                      const getTimestamp = (name: string) => {
+                        const match = name.match(/profile-(\d+)/);
+                        return match ? parseInt(match[1]) : 0;
+                      };
+                      
+                      const timeA = getTimestamp(a.name);
+                      const timeB = getTimestamp(b.name);
+                      
+                      return timeB - timeA; // Sort descending (newest first)
+                    });
+                    
+                    // Get URL of the most recent item
+                    console.log('Getting URL for most recent profile image:', sortedItems[0].name);
+                    return getDownloadURL(sortedItems[0]);
+                  } else {
+                    throw new Error('No profile images found');
+                  }
+                })
+                .then((url) => {
+                  console.log('Retrieved profile image URL:', url);
+                  setProfileImage(url);
+                })
+                .catch((err) => {
+                  console.warn('Could not find profile image in expected location:', err);
+                  
+                  // If we couldn't find images in the exact folder, try the broader approach
+                  const rootProfileImagesRef = ref(storage, 'profile-images');
+                  
+                  listAll(rootProfileImagesRef)
+                    .then((result) => {
+                      console.log('Looking through all profile image folders:', result.prefixes.length);
+                      
+                      // First try exact match on userId
+                      let matchingFolder = result.prefixes.find(prefix => prefix.name === userId);
+                      
+                      if (!matchingFolder) {
+                        console.log('No exact userId match, looking for partial matches');
+                        // Then try partial matches
+                        matchingFolder = result.prefixes.find(prefix => 
+                          userId.includes(prefix.name) || prefix.name.includes(userId)
+                        );
+                      }
+                      
+                      if (matchingFolder) {
+                        console.log('Found potential matching folder:', matchingFolder.name);
+                        return listAll(matchingFolder);
+                      } else {
+                        // Don't throw error, just use default profile image
+                        console.log('No matching profile folder found, using default image');
+                        setProfileImage('');
+                        return null;
+                      }
+                    })
+                    .then((folderContents) => {
+                      if (!folderContents) return; // Exit early if we already set the default image
+                      
+                      if (folderContents.items.length > 0) {
+                        console.log(`Found ${folderContents.items.length} images in folder`);
+                        
+                        // Sort to get the most recent one based on the profile-${timestamp} naming
+                        const sortedItems = [...folderContents.items].sort((a, b) => {
+                          // Extract timestamp from filename if possible
+                          const getTimestamp = (name: string) => {
+                            const match = name.match(/profile-(\d+)/);
+                            return match ? parseInt(match[1]) : 0;
+                          };
+                          
+                          const timeA = getTimestamp(a.name);
+                          const timeB = getTimestamp(b.name);
+                          
+                          return timeB - timeA; // Sort descending (newest first)
+                        });
+                        
+                        console.log('Using most recent image:', sortedItems[0].name);
+                        return getDownloadURL(sortedItems[0]);
+                      } else {
+                        // No images in folder, use default image
+                        console.log('No images in profile folder, using default image');
+                        setProfileImage('');
+                        return null;
+                      }
+                    })
+                    .then((url) => {
+                      if (url) {
+                        console.log('Retrieved fallback image URL:', url);
+                        setProfileImage(url);
+                      }
+                      // If url is null, we've already set the default image
+                    })
+                    .catch((finalError) => {
+                      console.error('All profile image retrieval methods failed:', finalError);
+                      // Use first letter of name as fallback (this matches what's in the render section)
+                      setProfileImage('');
+                    });
+                });
+            } catch (error) {
+              console.error('Error in profile image retrieval flow:', error);
+              setProfileImage('');
+            }
+          }
+          
+          // Fetch reviews for this user
+          const reviewsQuery = query(
+            collection(db as Firestore, 'reviews'),
+            where('reviewedUserId', '==', userId),
+            orderBy('timestamp', 'desc')
+          );
+          
+          const reviewsSnapshot = await getDocs(reviewsQuery);
+          const reviewsData = reviewsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          
+          setReviews(reviewsData);
+          console.log('Reviews fetched:', reviewsData);
+        } else {
+          console.error('User not found');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    if (userId) {
+      fetchUserData();
+    }
+  }, [userId, user]);
+
+  useEffect(() => {
+    if (!user) return; // Only fetch if logged in
+    const fetchUserProfile = async () => {
+      setIsLoading(true);
+      setError(null);
+      
+      try {
+        // Fetch basic user account data
+        const userDocRef = doc(db as Firestore, 'users', userId as string);
+        const userDocSnap = await getDoc(userDocRef);
+        
+        if (!userDocSnap.exists()) {
+          setError("User not found");
+          setIsLoading(false);
+          return;
+        }
+        
+        const userData = userDocSnap.data();
+        console.log("User data fetched:", userId);
+        
+        // Fetch detailed profile data from the profiles collection
+        const profileDocRef = doc(db as Firestore, 'profiles', userId as string);
+        const profileDocSnap = await getDoc(profileDocRef);
+        
+        let profileData: ProfileData = {};
+        if (profileDocSnap.exists()) {
+          profileData = profileDocSnap.data() as ProfileData;
+        }
+        
+        // Combine data from both collections
+        setUserProfile({
+          uid: userDocSnap.id,
+          displayName: userData.displayName || 'Anonymous User',
+          email: userData.email || '',
+          photoURL: profileImage || userData.photoURL || '',
+          bio: profileData.bio || 'No bio available',
+          location: profileData.location || 'Location not specified',
+          bannerImage: profileData.bannerImage || '',
+          joinedDate: userData.createdAt ? userData.createdAt.toDate() : new Date(),
+          skills: profileData.skills || [],
+          portfolio: profileData.portfolio || []
+        });
+        
+        // Fetch user's services
+        const servicesQuery = query(
+          collection(db as Firestore, 'services'),
+          where('userId', '==', userId)
+        );
+        
+        const servicesSnapshot = await getDocs(servicesQuery);
+        const servicesData: UserService[] = [];
+        
+        servicesSnapshot.forEach((doc) => {
+          const data = doc.data();
+          servicesData.push({
+            id: doc.id,
+            title: data.title,
+            description: data.description,
+            category: data.category,
+            location: data.location || 'Remote',
+            createdAt: data.createdAt?.toDate() || new Date(),
+            images: data.images || []
+          });
+        });
+        
+        setUserServices(servicesData);
+      } catch (err) {
+        console.error('Error fetching user profile:', err);
+        setError('Failed to load user profile. Please try again later.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    if (userId) {
+      fetchUserProfile();
+    }
+  }, [userId, profileImage, user]);
+
+  // Fetch feed posts
+  useEffect(() => {
+    setFeedLoading(true);
+    (async () => {
+      try {
+        const postsQuery = query(
+          collection(db, 'profilePosts'),
+          where('userId', '==', userId),
+          orderBy('createdAt', 'desc')
+        );
+        const postsSnap = await getDocs(postsQuery);
+        const posts = await Promise.all(postsSnap.docs.map(async (postDoc) => {
+          const postData = postDoc.data() as PostData;
+          // Fetch post author data
+          const userDocRef = doc(db, 'users', postData.userId);
+          const userDocSnap = await getDoc(userDocRef);
+          const userData = (userDocSnap.exists() ? userDocSnap.data() : {}) as UserData;
+          
+          // Fetch likes
+          const likesSnap = await getDocs(collection(db, 'profilePosts', postDoc.id, 'likes'));
+          const likes = likesSnap.docs.map(doc => doc.id);
+          
+          // Fetch emoji reactions
+          const emojiSnap = await getDocs(collection(db, 'profilePosts', postDoc.id, 'emojiReactions'));
+          const emojiData: { [emoji: string]: string[] } = {};
+          emojiSnap.docs.forEach(emojiDoc => {
+            const { emoji, userId } = emojiDoc.data();
+            if (!emojiData[emoji]) emojiData[emoji] = [];
+            emojiData[emoji].push(userId);
+          });
+
+          // Fetch comments with their likes and reactions
+          const commentsQuery = query(
+            collection(db, 'profilePosts', postDoc.id, 'comments'),
+            orderBy('createdAt', 'asc')
+          );
+          const commentsSnap = await getDocs(commentsQuery);
+          const comments = await Promise.all(commentsSnap.docs.map(async (commentDoc) => {
+            const commentData = commentDoc.data();
+            const commentUserDocRef = doc(db, 'users', commentData.userId);
+            const commentUserDocSnap = await getDoc(commentUserDocRef);
+            const commentUserData = (commentUserDocSnap.exists() ? commentUserDocSnap.data() : {}) as UserData;
+
+            // Fetch comment likes
+            const commentLikesSnap = await getDocs(collection(db, 'profilePosts', postDoc.id, 'comments', commentDoc.id, 'likes'));
+            const commentLikes = commentLikesSnap.docs.map(doc => doc.id);
+
+            // Fetch comment emoji reactions
+            const commentEmojiSnap = await getDocs(collection(db, 'profilePosts', postDoc.id, 'comments', commentDoc.id, 'emojiReactions'));
+            const commentEmojiData: { [emoji: string]: string[] } = {};
+            commentEmojiSnap.docs.forEach(emojiDoc => {
+              const { emoji, userId } = emojiDoc.data();
+              if (!commentEmojiData[emoji]) commentEmojiData[emoji] = [];
+              commentEmojiData[emoji].push(userId);
+            });
+
+            // Fetch replies
+            const repliesQuery = query(
+              collection(db, 'profilePosts', postDoc.id, 'comments', commentDoc.id, 'replies'),
+              orderBy('createdAt', 'asc')
+            );
+            const repliesSnap = await getDocs(repliesQuery);
+            const replies = await Promise.all(repliesSnap.docs.map(async (replyDoc) => {
+              const replyData = replyDoc.data();
+              const replyUserDocRef = doc(db, 'users', replyData.userId);
+              const replyUserDocSnap = await getDoc(replyUserDocRef);
+              const replyUserData = (replyUserDocSnap.exists() ? replyUserDocSnap.data() : {}) as UserData;
+              return {
+                id: replyDoc.id,
+                ...replyData,
+                displayName: replyUserData.displayName || 'User',
+                photoURL: replyUserData.photoURL || '/default-avatar.png'
+              };
+            }));
+
+            return {
+              id: commentDoc.id,
+              ...commentData,
+              displayName: commentUserData.displayName || 'User',
+              photoURL: commentUserData.photoURL || '/default-avatar.png',
+              likes: commentLikes,
+              emoji: commentEmojiData,
+              replies
+            };
+          }));
+
+          return {
+            id: postDoc.id,
+            ...postData,
+            displayName: userData.displayName || 'User',
+            photoURL: userData.photoURL || '/default-avatar.png',
+            likes,
+            emoji: emojiData,
+            comments
+          };
+        }));
+        
+        setFeedPosts(posts);
+        setFeedLoading(false);
+      } catch (error) {
+        console.error('Error fetching posts:', error);
+        setFeedLoading(false);
+      }
+    })();
+  }, [userId, showPostModal]);
+
+  // Fetch likes, comments, emoji for all posts
+  useEffect(() => {
+    if (!feedPosts.length) return;
+    const fetchInteractions = async () => {
+      const interactions: { [postId: string]: any } = {};
+      for (const post of feedPosts) {
+        // Likes
+        const likesSnap = await getDocs(collection(db, 'profilePosts', post.id, 'likes'));
+        const likes = likesSnap.docs.map(doc => doc.id);
+        // Emoji
+        const emojiSnap = await getDocs(collection(db, 'profilePosts', post.id, 'emojiReactions'));
+        const emojiData: { [emoji: string]: string[] } = {};
+        emojiSnap.docs.forEach(doc => {
+          const { emoji, userId } = doc.data();
+          if (!emojiData[emoji]) emojiData[emoji] = [];
+          emojiData[emoji].push(userId);
+        });
+        // Comments
+        const commentsSnap = await getDocs(query(collection(db, 'profilePosts', post.id, 'comments'), orderBy('createdAt', 'asc')));
+        const comments = commentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        interactions[post.id] = { likes, emoji: emojiData, comments };
+      }
+      setPostInteractions(interactions);
+    };
+    fetchInteractions();
+  }, [feedPosts]);
+
+  // Fetch comment likes, emoji, replies
+  useEffect(() => {
+    const fetchCommentInteractions = async () => {
+      // Map postId to comments for fallback
+      const postIdMap: { [commentId: string]: string } = {};
+      for (const post of feedPosts) {
+        (postInteractions[post.id]?.comments || []).forEach((comment: any) => {
+          if (!comment.postId) comment.postId = post.id;
+          postIdMap[comment.id] = post.id;
+        });
+      }
+      const allComments = feedPosts.flatMap(post => postInteractions[post.id]?.comments || []);
+      const interactions: { [commentId: string]: any } = {};
+      for (const comment of allComments) {
+        const postId = comment.postId || postIdMap[comment.id];
+        if (!postId) continue; // Defensive: skip if postId is still missing
+        // Likes
+        const likesSnap = await getDocs(collection(db, 'profilePosts', postId, 'comments', comment.id, 'likes'));
+        const likes = likesSnap.docs.map(doc => doc.id);
+        // Emoji
+        const emojiSnap = await getDocs(collection(db, 'profilePosts', postId, 'comments', comment.id, 'emojiReactions'));
+        const emojiData: { [emoji: string]: string[] } = {};
+        emojiSnap.docs.forEach(doc => {
+          const { emoji, userId } = doc.data();
+          if (!emojiData[emoji]) emojiData[emoji] = [];
+          emojiData[emoji].push(userId);
+        });
+        // Replies
+        const repliesSnap = await getDocs(query(collection(db, 'profilePosts', postId, 'comments', comment.id, 'replies'), orderBy('createdAt', 'asc')));
+        const replies = await Promise.all(repliesSnap.docs.map(async (replyDoc) => {
+          const replyData = replyDoc.data();
+          
+          // Fetch reply likes
+          const replyLikesSnap = await getDocs(collection(db, 'profilePosts', postId, 'comments', comment.id, 'replies', replyDoc.id, 'likes'));
+          const replyLikes = replyLikesSnap.docs.map(doc => doc.id);
+          
+          // Fetch reply emoji reactions
+          const replyEmojiSnap = await getDocs(collection(db, 'profilePosts', postId, 'comments', comment.id, 'replies', replyDoc.id, 'emojiReactions'));
+          const replyEmojiData: { [emoji: string]: string[] } = {};
+          replyEmojiSnap.docs.forEach(doc => {
+            const { emoji, userId } = doc.data();
+            if (!replyEmojiData[emoji]) replyEmojiData[emoji] = [];
+            replyEmojiData[emoji].push(userId);
+          });
+          
+          return {
+            id: replyDoc.id,
+            ...replyData,
+            likes: replyLikes,
+            emoji: replyEmojiData
+          };
+        }));
+        
+        interactions[comment.id] = { likes, emoji: emojiData, replies };
+      }
+      setCommentInteractions(interactions);
+    };
+    if (feedPosts.length && Object.keys(postInteractions).length) fetchCommentInteractions();
+  }, [feedPosts, postInteractions]);
+
+  // Helper: extract first URL from text
+  function extractFirstUrl(text: string) {
+    // Match http(s)://, www., or bare domains (servswap.com, sub.domain.com, etc)
+    const urlRegex = /(?:https?:\/\/[^\s]+)|(?:www\.[^\s]+)|(?:[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+\.[a-zA-Z]{2,}(?:\/[^-\s]*)?)/gi;
+    const match = text.match(urlRegex);
+    if (!match) return null;
+    let url = match[0].replace(/^[@(\[\{]+/, ''); // Remove leading @, (, [, {
+    // Prepend https:// if missing
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url;
+    }
+    return url;
+  }
+
+  // Helper: fetch link preview
+  async function fetchLinkPreview(url: string) {
+    try {
+      const res = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(url)}`);
+      if (!res.ok) return null;
+      const { data } = await res.json();
+      // Normalize to your expected structure
+      return {
+        title: data.title,
+        description: data.description,
+        image: data.image?.url,
+        url: data.url
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Watch for link in new post content
+  useEffect(() => {
+    const url = extractFirstUrl(newPostContent);
+    if (url) {
+      fetchLinkPreview(url).then(setNewPostLinkPreview);
+    } else {
+      setNewPostLinkPreview(null);
+    }
+  }, [newPostContent]);
+
+  // Handle image selection
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setNewPostImage(file);
+      setNewPostImagePreview(URL.createObjectURL(file));
+    }
+  };
+
+  // Handle new post submit (with image and link preview)
+  const handlePostSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPostContent.trim() && !newPostImage) return;
+    setPosting(true);
+    let imageUrl = '';
+    if (newPostImage) {
+      const storage = getStorage();
+      const fileRef = storageRef(storage, `profilePosts/${userId}/${Date.now()}-${newPostImage.name}`);
+      await uploadBytes(fileRef, newPostImage);
+      imageUrl = await getDownloadURL(fileRef);
+    }
+    let linkPreview = null;
+    if (newPostLinkPreview) {
+      linkPreview = newPostLinkPreview;
+    }
+    await addDoc(collection(db, 'profilePosts'), {
+      userId,
+      content: newPostContent.trim(),
+      createdAt: serverTimestamp(),
+      authorName: user?.displayName || 'You',
+      authorPhoto: user?.photoURL || '',
+      imageUrl,
+      linkPreview,
+    });
+    setNewPostContent('');
+    setNewPostImage(null);
+    setNewPostImagePreview(null);
+    setNewPostLinkPreview(null);
+    setShowPostModal(false);
+    setPosting(false);
+  };
+
+  // Function to handle initiating a swap with this user
+  const handleContactUser = () => {
+    if (!user) {
+      router.push('/auth/login');
+      return;
+    }
+    
+    // Redirect to messaging or swap initiation with this user
+    router.push(`/dashboard/inbox/new?recipientId=${userId}`);
+  };
+
+  // Function to handle sending a connection request
+  const handleConnect = async () => {
+    if (!user) {
+      router.push('/auth/login');
+      return;
+    }
+    
+    try {
+      // Check if a connection request already exists
+      const existingRequestQuery = query(
+        collection(db, 'connectionRequests'),
+        where('fromUserId', '==', user.uid),
+        where('toUserId', '==', userId),
+        where('status', 'in', ['pending', 'accepted'])
+      );
+      
+      const existingRequestSnap = await getDocs(existingRequestQuery);
+      
+      if (!existingRequestSnap.empty) {
+        // Request already exists
+        alert('You have already sent a connection request to this user.');
+        return;
+      }
+      
+      // Check if user has already connected with this profile
+      const existingConnectionQuery = query(
+        collection(db, 'connections'),
+        where('users', 'array-contains', user.uid),
+        where('status', '==', 'connected')
+      );
+      
+      const existingConnectionSnap = await getDocs(existingConnectionQuery);
+      const alreadyConnected = existingConnectionSnap.docs.some(doc => {
+        const data = doc.data();
+        return data.users.includes(userId);
+      });
+      
+      if (alreadyConnected) {
+        alert('You are already connected with this user.');
+        return;
+      }
+      
+      // Create a new connection request
+      const requestData = {
+        fromUserId: user.uid,
+        fromUserName: user.displayName || 'User',
+        fromUserPhoto: user.photoURL || '',
+        toUserId: userId,
+        status: 'pending',
+        createdAt: serverTimestamp()
+      };
+      
+      await addDoc(collection(db, 'connectionRequests'), requestData);
+      
+      // Create notification for connection request
+      await createNotification({
+        userId: userId,
+        type: 'follow',
+        senderId: user.uid,
+        senderName: user.displayName || 'User',
+        message: `${user.displayName || 'Someone'} wants to connect with you`
+      });
+      
+      alert('Connection request sent successfully!');
+    } catch (error) {
+      console.error('Error sending connection request:', error);
+      alert('Failed to send connection request. Please try again.');
+    }
+  };
+  
+  const getCategoryColor = (category: string) => {
+    const categoryColors: {[key: string]: string} = {
+      'Technology': 'bg-blue-100 text-blue-800',
+      'Design': 'bg-purple-100 text-purple-800',
+      'Marketing': 'bg-green-100 text-green-800',
+      'Writing': 'bg-yellow-100 text-yellow-800',
+      'Business': 'bg-gray-100 text-gray-800',
+      'Lifestyle': 'bg-pink-100 text-pink-800',
+      'Education': 'bg-indigo-100 text-indigo-800',
+      'Health': 'bg-teal-100 text-teal-800',
+      'Entertainment': 'bg-red-100 text-red-800',
+      'Other': 'bg-orange-100 text-orange-800'
+    };
+    
+    return categoryColors[category] || 'bg-indigo-100 text-indigo-800';
+  };
+
+  // Delete post handler
+  const handleDeletePost = async (post: any) => {
+    setDeletingPostId(post.id);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeletePost = async () => {
+    const post = feedPosts.find(p => p.id === deletingPostId);
+    if (!post) return;
+    // Remove from UI instantly
+    setFeedPosts(prev => prev.filter(p => p.id !== deletingPostId));
+    setShowDeleteConfirm(false);
+    setDeletingPostId(null);
+    // Delete from Firestore
+    await deleteDoc(firestoreDoc(db, 'profilePosts', post.id));
+    // Delete image from Storage if present
+    if (post.imageUrl) {
+      try {
+        const storage = getStorage();
+        const fileRef = storageRef(storage, post.imageUrl.replace(/^https?:\/\/[^/]+\/o\//, '').replace(/\?.*$/, '').replace(/%2F/g, '/'));
+        await deleteObject(fileRef);
+      } catch (err) {
+        // Ignore errors (image may already be gone)
+      }
+    }
+  };
+
+  // Like/unlike post
+  const handleLike = async (postId: string) => {
+    if (!user) return;
+    const likeRef = doc(db, 'profilePosts', postId, 'likes', user.uid);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const hasLiked = post.likes?.includes(user.uid);
+    try {
+      if (hasLiked) {
+        await deleteDoc(likeRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              likes: p.likes?.filter((id: string) => id !== user.uid) || []
+            };
+          }
+          return p;
+        }));
+
+        // Create notification for like
+        if (post.userId !== user.uid) {
+          await createNotification({
+            userId: post.userId,
+            type: 'like',
+            senderId: user.uid,
+            senderName: user.displayName || 'User',
+            postId: postId
+          });
+        }
+      } else {
+        await setDoc(likeRef, { userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              likes: [...(p.likes || []), user.uid]
+            };
+          }
+          return p;
+        }));
+
+        // Create notification for like
+        if (post.userId !== user.uid) {
+          await createNotification({
+            userId: post.userId,
+            type: 'like',
+            senderId: user.uid,
+            senderName: user.displayName || 'User',
+            postId: postId
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling like:', error);
+    }
+  };
+
+  // Add type guard for user ID
+  const isUserId = (id: string | undefined): id is string => {
+    return typeof id === 'string' && id.length > 0;
+  };
+
+  // Update the emoji reaction handlers
+  const handleEmoji = async (postId: string, emoji: string) => {
+    if (!user) return;
+    const emojiRef = doc(db, 'profilePosts', postId, 'emojiReactions', `${emoji}_${user.uid!}`);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const hasReacted = post.emoji?.[emoji]?.includes(user.uid);
+    try {
+      if (hasReacted) {
+        await deleteDoc(emojiRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            const updatedEmoji = { ...p.emoji };
+            if (updatedEmoji[emoji]) {
+              updatedEmoji[emoji] = updatedEmoji[emoji].filter((id: string) => id !== user.uid);
+              if (updatedEmoji[emoji].length === 0) {
+                delete updatedEmoji[emoji];
+              }
+            }
+            return { ...p, emoji: updatedEmoji };
+          }
+          return p;
+        }));
+      } else {
+        await setDoc(emojiRef, { emoji, userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            const updatedEmoji = { ...p.emoji };
+            if (!updatedEmoji[emoji]) {
+              updatedEmoji[emoji] = [];
+            }
+            if (!updatedEmoji[emoji].includes(user.uid)) {
+              updatedEmoji[emoji].push(user.uid);
+            }
+            return { ...p, emoji: updatedEmoji };
+          }
+          return p;
+        }));
+      }
+      setShowEmojiPicker(prev => ({ ...prev, [postId]: false }));
+    } catch (error) {
+      console.error('Error handling emoji:', error);
+    }
+  };
+
+  // Add comment
+  const handleAddComment = async (postId: string) => {
+    if (!user) return;
+    const text = commentInputs[postId]?.trim();
+    if (!text) return;
+
+    const commentRef = collection(db, 'profilePosts', postId, 'comments');
+    const newComment = {
+      userId: user.uid,
+      text,
+      createdAt: serverTimestamp(),
+      displayName: user.displayName || 'User',
+      photoURL: user.photoURL || '/default-avatar.png'
+    };
+
+    const docRef = await addDoc(commentRef, newComment);
+    
+    // Update local state
+    setFeedPosts(prev => prev.map(p => {
+      if (p.id === postId) {
+        return {
+          ...p,
+          comments: [...(p.comments || []), { id: docRef.id, ...newComment }]
+        };
+      }
+      return p;
+    }));
+
+    // Create notification for comment
+    const post = feedPosts.find(p => p.id === postId);
+    if (post && post.userId !== user.uid) {
+      await createNotification({
+        userId: post.userId,
+        type: 'comment',
+        senderId: user.uid,
+        senderName: user.displayName || 'User',
+        postId: postId,
+        comment: text
+      });
+    }
+
+    setCommentInputs(prev => ({ ...prev, [postId]: '' }));
+  };
+
+  // Like/unlike comment
+  const handleLikeComment = async (postId: string, commentId: string) => {
+    if (!user) return;
+    const likeRef = doc(db, 'profilePosts', postId, 'comments', commentId, 'likes', user.uid);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const comment = post.comments.find((c: Comment) => c.id === commentId);
+    if (!comment) return;
+    
+    const hasLiked = comment.likes?.includes(user.uid);
+    try {
+      if (hasLiked) {
+        await deleteDoc(likeRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    likes: c.likes?.filter((id: string) => id !== user.uid) || []
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      } else {
+        await setDoc(likeRef, { userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    likes: [...(c.likes || []), user.uid]
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (error) {
+      console.error('Error handling comment like:', error);
+    }
+  };
+
+  // Update the emoji reaction handlers
+  const handleCommentEmoji = async (postId: string, commentId: string, emoji: string) => {
+    if (!user) return;
+    const emojiRef = doc(db, 'profilePosts', postId, 'comments', commentId, 'emojiReactions', `${emoji}_${user.uid!}`);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const comment = post.comments.find((c: Comment) => c.id === commentId);
+    if (!comment) return;
+    
+    const hasReacted = comment.emoji?.[emoji]?.includes(user.uid);
+    try {
+      if (hasReacted) {
+        await deleteDoc(emojiRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  const updatedEmoji = { ...c.emoji };
+                  if (updatedEmoji[emoji]) {
+                    updatedEmoji[emoji] = updatedEmoji[emoji].filter((id: string) => id !== user.uid);
+                    if (updatedEmoji[emoji].length === 0) {
+                      delete updatedEmoji[emoji];
+                    }
+                  }
+                  return { ...c, emoji: updatedEmoji };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      } else {
+        await setDoc(emojiRef, { emoji, userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  const updatedEmoji = { ...c.emoji };
+                  if (!updatedEmoji[emoji]) {
+                    updatedEmoji[emoji] = [];
+                  }
+                  if (!updatedEmoji[emoji].includes(user.uid)) {
+                    updatedEmoji[emoji].push(user.uid);
+                  }
+                  return { ...c, emoji: updatedEmoji };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+      setShowCommentEmojiPicker(prev => ({ ...prev, [comment.id]: false }));
+    } catch (error) {
+      console.error('Error handling comment emoji:', error);
+    }
+  };
+
+  // Add reply to comment
+  const handleAddReply = async (postId: string, commentId: string) => {
+    if (!user) return;
+    const text = replyInputs[commentId]?.trim();
+    if (!text) return;
+
+    const replyRef = collection(db, 'profilePosts', postId, 'comments', commentId, 'replies');
+    const newReply = {
+      userId: user.uid,
+      text,
+      createdAt: serverTimestamp(),
+      displayName: user.displayName || 'User',
+      photoURL: user.photoURL || '/default-avatar.png'
+    };
+
+    try {
+      const docRef = await addDoc(replyRef, newReply);
+      
+      // Update local state
+      setFeedPosts(prev => prev.map(p => {
+        if (p.id === postId) {
+          return {
+            ...p,
+            comments: p.comments.map((c: Comment) => {
+              if (c.id === commentId) {
+                return {
+                  ...c,
+                  replies: [...(c.replies || []), { id: docRef.id, ...newReply }]
+                };
+              }
+              return c;
+            })
+          };
+        }
+        return p;
+      }));
+
+      // Create notification for reply
+      const post = feedPosts.find(p => p.id === postId);
+      const comment = post?.comments.find((c: Comment) => c.id === commentId);
+      if (post && comment && comment.userId !== user.uid) {
+        await createNotification({
+          userId: comment.userId,
+          type: 'comment',
+          senderId: user.uid,
+          senderName: user.displayName || 'User',
+          postId: postId,
+          comment: text
+        });
+      }
+
+      setReplyInputs(prev => ({ ...prev, [commentId]: '' }));
+      setShowReplyBox(prev => ({ ...prev, [commentId]: false }));
+    } catch (error) {
+      console.error('Error adding reply:', error);
+    }
+  };
+
+  // Handle key press for comments and replies
+  const handleKeyPress = (e: React.KeyboardEvent, postId: string, commentId?: string) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (commentId) {
+        handleAddReply(postId, commentId);
+      } else {
+        handleAddComment(postId);
+      }
+    }
+  };
+
+  // Defensive helper for includes
+  function safeIncludes(arr: any, value: any) {
+    return Array.isArray(arr) ? arr.includes(value) : false;
+  }
+
+  // Add delete comment handler
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    // Remove from UI instantly
+    setPostInteractions(prev => {
+      const postComments = prev[postId]?.comments?.filter((c: any) => c.id !== commentId) || [];
+      return { ...prev, [postId]: { ...prev[postId], comments: postComments } };
+    });
+    setCommentInteractions(prev => {
+      const newInteractions = { ...prev };
+      delete newInteractions[commentId];
+      return newInteractions;
+    });
+    await deleteDoc(doc(db, 'profilePosts', postId, 'comments', commentId));
+  };
+
+  // Add delete reply handler
+  const handleDeleteReply = async (postId: string, commentId: string, replyId: string) => {
+    // Remove from UI instantly
+    setFeedPosts(prev => prev.map(p => {
+      if (p.id === postId) {
+        return {
+          ...p,
+          comments: p.comments.map((c: Comment) => {
+            if (c.id === commentId) {
+              return {
+                ...c,
+                replies: c.replies.filter((r: Reply) => r.id !== replyId)
+              };
+            }
+            return c;
+          })
+        };
+      }
+      return p;
+    }));
+    
+    await deleteDoc(doc(db, 'profilePosts', postId, 'comments', commentId, 'replies', replyId));
+  };
+
+  // Like/unlike reply
+  const handleLikeReply = async (postId: string, commentId: string, replyId: string) => {
+    if (!user) return;
+    const likeRef = doc(db, 'profilePosts', postId, 'comments', commentId, 'replies', replyId, 'likes', user.uid);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const comment = post.comments.find((c: Comment) => c.id === commentId);
+    if (!comment) return;
+    
+    const reply = comment.replies.find((r: Reply) => r.id === replyId);
+    if (!reply) return;
+    
+    const hasLiked = reply.likes?.includes(user.uid);
+    try {
+      if (hasLiked) {
+        await deleteDoc(likeRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    replies: c.replies.map((r: Reply) => {
+                      if (r.id === replyId) {
+                        return {
+                          ...r,
+                          likes: r.likes?.filter((id: string) => id !== user.uid) || []
+                        };
+                      }
+                      return r;
+                    })
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      } else {
+        await setDoc(likeRef, { userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    replies: c.replies.map((r: Reply) => {
+                      if (r.id === replyId) {
+                        return {
+                          ...r,
+                          likes: [...(r.likes || []), user.uid]
+                        };
+                      }
+                      return r;
+                    })
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (error) {
+      console.error('Error handling reply like:', error);
+    }
+  };
+
+  // Add emoji reaction to reply
+  const handleReplyEmoji = async (postId: string, commentId: string, replyId: string, emoji: string) => {
+    if (!user) return;
+    const emojiRef = doc(db, 'profilePosts', postId, 'comments', commentId, 'replies', replyId, 'emojiReactions', `${emoji}_${user.uid!}`);
+    const post = feedPosts.find(p => p.id === postId);
+    if (!post) return;
+    
+    const comment = post.comments.find((c: Comment) => c.id === commentId);
+    if (!comment) return;
+    
+    const reply = comment.replies.find((r: Reply) => r.id === replyId);
+    if (!reply) return;
+    
+    const hasReacted = reply.emoji?.[emoji]?.includes(user.uid);
+    try {
+      if (hasReacted) {
+        await deleteDoc(emojiRef);
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    replies: c.replies.map((r: Reply) => {
+                      if (r.id === replyId) {
+                        const updatedEmoji = { ...r.emoji };
+                        if (updatedEmoji[emoji]) {
+                          updatedEmoji[emoji] = updatedEmoji[emoji].filter((id: string) => id !== user.uid);
+                          if (updatedEmoji[emoji].length === 0) {
+                            delete updatedEmoji[emoji];
+                          }
+                        }
+                        return { ...r, emoji: updatedEmoji };
+                      }
+                      return r;
+                    })
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      } else {
+        await setDoc(emojiRef, { emoji, userId: user.uid });
+        // Update local state
+        setFeedPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: p.comments.map((c: Comment) => {
+                if (c.id === commentId) {
+                  return {
+                    ...c,
+                    replies: c.replies.map((r: Reply) => {
+                      if (r.id === replyId) {
+                        const updatedEmoji = { ...r.emoji };
+                        if (!updatedEmoji[emoji]) {
+                          updatedEmoji[emoji] = [];
+                        }
+                        if (!updatedEmoji[emoji].includes(user.uid)) {
+                          updatedEmoji[emoji].push(user.uid);
+                        }
+                        return { ...r, emoji: updatedEmoji };
+                      }
+                      return r;
+                    })
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+      setShowReplyEmojiPicker(prev => ({ ...prev, [replyId]: false }));
+    } catch (error) {
+      console.error('Error handling reply emoji:', error);
+    }
+  };
+
+  // Add new useEffect to fetch completed swaps
+  useEffect(() => {
+    const fetchCompletedSwaps = async () => {
+      if (!user || !userId) {
+        console.log('Missing user or userId:', { user: !!user, userId });
+        return;
+      }
+      
+      try {
+        console.log('Starting swap fetch for:', { 
+          currentUser: user.uid, 
+          targetUser: userId,
+          currentUserName: user.displayName
+        });
+        
+        // Query for completed swaps
+        const swapsQuery = query(
+          collection(db, 'swaps'),
+          where('status', '==', 'completed')
+        );
+        
+        const swapsSnapshot = await getDocs(swapsQuery);
+        console.log('Found completed swaps:', swapsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })));
+        
+        const swaps = swapsSnapshot.docs
+          .map(doc => {
+            const data = doc.data();
+            return {
+              id: doc.id,
+              title: data.message || 'Swap',
+              providerId: data.providerId,
+              receiverId: data.receiverId,
+              status: data.status,
+              completedAt: data.completedAt?.toDate() || data.updatedAt?.toDate() || new Date()
+            };
+          })
+          .filter(swap => {
+            // Log each swap we're checking
+            console.log('Analyzing swap:', {
+              id: swap.id,
+              title: swap.title,
+              status: swap.status,
+              providerId: swap.providerId,
+              receiverId: swap.receiverId,
+              currentUserIsProvider: swap.providerId === user.uid,
+              currentUserIsReceiver: swap.receiverId === user.uid,
+              targetUserIsProvider: swap.providerId === userId,
+              targetUserIsReceiver: swap.receiverId === userId
+            });
+            
+            // Check if either user is the provider or receiver
+            const isValidSwap = 
+              (swap.providerId === userId && swap.receiverId === user.uid) ||
+              (swap.providerId === user.uid && swap.receiverId === userId);
+            
+            return isValidSwap;
+          });
+        
+        console.log('Final filtered swaps:', swaps);
+        setCompletedSwaps(swaps);
+      } catch (error) {
+        console.error('Error fetching completed swaps:', error);
+      }
+    };
+    
+    fetchCompletedSwaps();
+  }, [user, userId]);
+
+  // Fetch endorsements and reviewer profile photos
+  useEffect(() => {
+    const fetchEndorsements = async () => {
+      if (!userId) return;
+      try {
+        const endorsementsQuery = query(
+          collection(db, 'endorsements'),
+          where('toUserId', '==', userId),
+          orderBy('createdAt', 'desc')
+        );
+        const endorsementsSnapshot = await getDocs(endorsementsQuery);
+        const endorsementsData = await Promise.all(
+          endorsementsSnapshot.docs.map(async docSnap => {
+            const data = docSnap.data();
+            // Fetch reviewer profile photo
+            let fromUserPhoto = data.fromUserPhoto;
+            if (!fromUserPhoto && data.fromUserId) {
+              try {
+                const userDoc = await getDoc(doc(db, 'users', data.fromUserId));
+                if (userDoc.exists()) {
+                  fromUserPhoto = userDoc.data().photoURL || '';
+                }
+              } catch {}
+            }
+            return {
+              id: docSnap.id,
+              fromUserId: data.fromUserId,
+              fromUserName: data.fromUserName,
+              swapId: data.swapId,
+              swapTitle: data.swapTitle,
+              review: data.review,
+              rating: data.rating,
+              createdAt: data.createdAt?.toDate() || new Date(),
+              fromUserPhoto: fromUserPhoto || '',
+            };
+          })
+        );
+        setEndorsements(endorsementsData);
+      } catch (error) {
+        console.error('Error fetching endorsements:', error);
+      }
+    };
+    fetchEndorsements();
+  }, [userId]);
+
+  // Update the handleEndorse function
+  const handleEndorse = async () => {
+    if (!user || !selectedSwap || !endorsementReview.trim() || endorsementRating === 0) return;
+    
+    // Check if user has already endorsed this swap
+    if (hasEndorsedSwap(selectedSwap)) {
+      alert("You have already endorsed this swap!");
+      setShowEndorseModal(false);
+      return;
+    }
+    
+    setIsEndorsing(true);
+    try {
+      const newEndorsement = {
+        fromUserId: user.uid,
+        fromUserName: user.displayName || 'Anonymous',
+        toUserId: userId,
+        swapId: selectedSwap,
+        swapTitle: completedSwaps.find(s => s.id === selectedSwap)?.title || '',
+        review: endorsementReview.trim(),
+        rating: endorsementRating,
+        createdAt: serverTimestamp()
+      };
+      
+      const docRef = await addDoc(collection(db, 'endorsements'), newEndorsement);
+      
+      // Update local state with the actual document ID
+      setEndorsements(prev => [{
+        id: docRef.id,
+        ...newEndorsement,
+        createdAt: new Date()
+      }, ...prev]);
+      
+      // Reset form
+      setSelectedSwap('');
+      setEndorsementReview('');
+      setEndorsementRating(0);
+      setShowEndorseModal(false);
+    } catch (error) {
+      console.error('Error adding endorsement:', error);
+    } finally {
+      setIsEndorsing(false);
+    }
+  };
+
+  // Add these helper functions for the carousel
+  const handleNextReviews = () => {
+    if (currentReviewIndex + reviewsPerPage < endorsements.length) {
+      setCurrentReviewIndex(currentReviewIndex + reviewsPerPage);
+    }
+  };
+
+  const handlePrevReviews = () => {
+    if (currentReviewIndex - reviewsPerPage >= 0) {
+      setCurrentReviewIndex(currentReviewIndex - reviewsPerPage);
+    }
+  };
+
+  useEffect(() => {
+    if (postId && feedPosts.length > 0) {
+      const el = document.getElementById(`post-${postId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-indigo-400');
+        setTimeout(() => el.classList.remove('ring-2', 'ring-indigo-400'), 2000);
+      }
+    }
+  }, [feedPosts, postId]);
+
+  // Fetch connections count
+  useEffect(() => {
+    const fetchConnectionsCount = async () => {
+      if (!userId) return;
+      try {
+        const connectionsQuery = query(
+          collection(db, 'connections'),
+          where('users', 'array-contains', userId),
+          where('status', '==', 'connected')
+        );
+        const connectionsSnap = await getDocs(connectionsQuery);
+        setConnectionsCount(connectionsSnap.size);
+      } catch (error) {
+        console.error('Error fetching connections count:', error);
+      }
+    };
+    fetchConnectionsCount();
+  }, [userId]);
+
+  // Add new useEffect here
+  
+  // Fetch total completed swaps count
+  useEffect(() => {
+    const fetchTotalSwapsCount = async () => {
+      if (!userId) return;
+      try {
+        // Query for swaps where the user is provider
+        const providerSwapsQuery = query(
+          collection(db, 'swaps'),
+          where('providerId', '==', userId),
+          where('status', '==', 'completed')
+        );
+        
+        // Query for swaps where the user is receiver
+        const receiverSwapsQuery = query(
+          collection(db, 'swaps'),
+          where('receiverId', '==', userId),
+          where('status', '==', 'completed')
+        );
+        
+        // Fetch both queries
+        const [providerSnap, receiverSnap] = await Promise.all([
+          getDocs(providerSwapsQuery),
+          getDocs(receiverSwapsQuery)
+        ]);
+        
+        // Combine and deduplicate swaps (in case somehow a user appears as both provider and receiver)
+        const swapIds = new Set([
+          ...providerSnap.docs.map(doc => doc.id),
+          ...receiverSnap.docs.map(doc => doc.id)
+        ]);
+        
+        setTotalSwapsCount(swapIds.size);
+      } catch (error) {
+        console.error('Error fetching total swaps count:', error);
+      }
+    };
+    fetchTotalSwapsCount();
+  }, [userId]);
+
+  // Fetch all connections for the profile user
+  useEffect(() => {
+    const fetchConnections = async () => {
+      if (!userId) return;
+      try {
+        const connectionsQuery = query(
+          collection(db, 'connections'),
+          where('users', 'array-contains', userId),
+          where('status', '==', 'connected')
+        );
+        const snap = await getDocs(connectionsQuery);
+        const connections = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setProfileConnections(connections);
+      } catch (error) {
+        console.error('Error fetching profile connections:', error);
+      }
+    };
+    fetchConnections();
+  }, [userId]);
+
+  // Fetch all connections for the viewer (if logged in)
+  useEffect(() => {
+    if (!user) return;
+    const fetchViewerConnections = async () => {
+      try {
+        const connectionsQuery = query(
+          collection(db, 'connections'),
+          where('users', 'array-contains', user.uid),
+          where('status', '==', 'connected')
+        );
+        const snap = await getDocs(connectionsQuery);
+        const connections = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setViewerConnections(connections);
+      } catch (error) {
+        console.error('Error fetching viewer connections:', error);
+      }
+    };
+    fetchViewerConnections();
+  }, [user]);
+
+  // Compute mutual connections
+  useEffect(() => {
+    if (!user || !profileConnections.length || !viewerConnections.length) {
+      setMutualConnections([]);
+      return;
+    }
+    // Get all user IDs connected to the profile user
+    const profileUserIds = new Set(profileConnections.flatMap(conn => conn.users.filter((id: string) => id !== userId)));
+    // Get all user IDs connected to the viewer
+    const viewerUserIds = new Set(viewerConnections.flatMap(conn => conn.users.filter((id: string) => id !== user?.uid)));
+    // Find intersection
+    const mutuals = Array.from(profileUserIds).filter(id => viewerUserIds.has(id));
+    setMutualConnections(mutuals);
+  }, [user, profileConnections, viewerConnections, userId]);
+
+  // Fetch user info for each connection (for modal display)
+  useEffect(() => {
+    const fetchUserInfos = async () => {
+      const uids = Array.from(new Set(profileConnections.flatMap(conn => conn.users.filter((id: string) => id !== userId))));
+      if (uids.length === 0) return;
+      const infos: {[uid: string]: any} = {};
+      await Promise.all(uids.map(async (uid) => {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', uid));
+          if (userDoc.exists()) infos[uid] = userDoc.data();
+        } catch {}
+      }));
+      setConnectionsUserInfo(infos);
+    };
+    fetchUserInfos();
+  }, [profileConnections, userId]);
+
+  // Connect with a connection
+  const handleConnectWithConnection = async (targetUserId: string) => {
+    if (!user) {
+      router.push('/auth/login');
+      return;
+    }
+    setConnectingId(targetUserId);
+    try {
+      // Check if already connected
+      const existingConnectionQuery = query(
+        collection(db, 'connections'),
+        where('users', 'array-contains', user.uid),
+        where('status', '==', 'connected')
+      );
+      const snap = await getDocs(existingConnectionQuery);
+      const alreadyConnected = snap.docs.some(doc => {
+        const data = doc.data();
+        return data.users.includes(targetUserId);
+      });
+      if (alreadyConnected) {
+        alert('You are already connected with this user.');
+        setConnectingId(null);
+        return;
+      }
+      // Send connection request
+      const requestData = {
+        fromUserId: user.uid,
+        fromUserName: user.displayName || 'User',
+        fromUserPhoto: user.photoURL || '',
+        toUserId: targetUserId,
+        status: 'pending',
+        createdAt: serverTimestamp()
+      };
+      await addDoc(collection(db, 'connectionRequests'), requestData);
+      await createNotification({
+        userId: targetUserId,
+        type: 'follow',
+        senderId: user.uid,
+        senderName: user.displayName || 'User',
+        message: `${user.displayName || 'Someone'} wants to connect with you`
+      });
+      alert('Connection request sent!');
+    } catch (error) {
+      alert('Failed to send connection request.');
+    } finally {
+      setConnectingId(null);
+    }
+  };
+
+  // Check for endorsement query params
+  useEffect(() => {
+    if (user && userId && userId !== user.uid) {
+      const endorse = searchParams.get('endorse');
+      const swapId = searchParams.get('swapId');
+      
+      if (endorse === 'true') {
+        setShowEndorseModal(true);
+        
+        if (swapId) {
+          setSelectedSwap(swapId);
+        }
+      }
+    }
+  }, [user, userId, searchParams]);
+
+  if (loading) {
+    return (
+      <>
+        <Header />
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-indigo-500"></button>
+        </button>
+      </>
+    );
+  }
+
+  if (error || !userProfile) {
+    return (
+      <>
+        <Header />
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+          <div className="text-center bg-white p-8 rounded-lg shadow-md max-w-md">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">{error || "User not found"}</h1>
+            <p className="text-gray-600 mb-6">The user profile you're looking for could not be found or is unavailable.</p>
+            <Link href="/marketplace" className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              Back to Marketplace
+            </Link>
+          </button>
+        </button>
+      </>
+    );
+  }
+
+  if (!user) {
+    // Not logged in: show only header and a CTA
+    return (
+      <>
+        <Header />
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+          {/* Profile header (copied from main render) */}
+          <div 
+            className={`text-white py-16 relative`}
+            style={{
+              background: userProfile?.bannerImage 
+                ? 'none' 
+                : 'linear-gradient(to right, #4f46e5, #9333ea, #ec4899)'
+            }}
+          >
+            {userProfile?.bannerImage && (
+              <div className="absolute inset-0 z-0">
+                <Image 
+                  src={userProfile.bannerImage} 
+                  alt="Profile banner" 
+                  fill 
+                  className="object-cover"
+                  priority
+                />
+                <div className="absolute inset-0 bg-black bg-opacity-40"></button>
+              </button>
+            )}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+              <div className="flex flex-col md:flex-row items-center justify-between">
+                <div className="flex flex-col md:flex-row items-center">
+                  <div className="h-32 w-32 md:h-40 md:w-40 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 md:mb-0 md:mr-8">
+                    {userProfile?.photoURL ? (
+                      <Image 
+                        src={userProfile.photoURL} 
+                        alt={userProfile.displayName} 
+                        width={160} 
+                        height={160} 
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                        <span className="text-white text-4xl font-medium">{userProfile?.displayName?.charAt(0)}</span>
+                      </button>
+                    )}
+                  </button>
+                  <div className="text-center md:text-left">
+                    <h1 className="text-3xl md:text-4xl font-bold flex items-center gap-2">
+                      {userProfile?.displayName}
+                    </h1>
+                    <p className="text-indigo-100 flex items-center justify-center md:justify-start mt-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      {userProfile?.location}
+                    </p>
+                    <p className="text-indigo-100 mt-1">Member since {userProfile?.joinedDate?.toLocaleDateString()}</p>
+                  </button>
+                </button>
+              </button>
+            </button>
+          </button>
+          {/* CTA card */}
+          <div className="max-w-xl mx-auto mt-12 bg-white rounded-xl shadow-lg p-8 text-center border border-gray-100">
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Sign up or log in to view this profile</h2>
+            <p className="text-gray-600 mb-6">Create an account or log in to see {userProfile?.displayName?.split(' ')[0]}'s full profile, services, posts, and more.</p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Link href="/auth/signup" className="inline-block px-6 py-3 rounded-lg bg-indigo-600 text-white font-semibold shadow hover:bg-indigo-700 transition">Sign Up</Link>
+              <Link href="/auth/login" className="inline-block px-6 py-3 rounded-lg bg-white text-indigo-700 font-semibold border border-indigo-600 shadow hover:bg-indigo-50 transition">Log In</Link>
+            </button>
+          </button>
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Header />
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        {/* Profile header */}
+        <div 
+          className={`text-white py-16 relative`}
+          style={{
+            background: userProfile.bannerImage 
+              ? 'none' 
+              : 'linear-gradient(to right, #4f46e5, #9333ea, #ec4899)'
+          }}
+        >
+          {userProfile.bannerImage && (
+            <div className="absolute inset-0 z-0">
+              <Image 
+                src={userProfile.bannerImage} 
+                alt="Profile banner" 
+                fill 
+                className="object-cover"
+                priority
+              />
+              {/* Overlay to ensure text readability */}
+              <div className="absolute inset-0 bg-black bg-opacity-40"></button>
+            </button>
+          )}
+          
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+            <div className="flex flex-col md:flex-row items-center justify-between">
+              <div className="flex flex-col md:flex-row items-center">
+                <div className="h-32 w-32 md:h-40 md:w-40 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 md:mb-0 md:mr-8">
+                  {userProfile.photoURL ? (
+                    <Image 
+                      src={userProfile.photoURL} 
+                      alt={userProfile.displayName} 
+                      width={160} 
+                      height={160} 
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                      <span className="text-white text-4xl font-medium">{userProfile.displayName.charAt(0)}</span>
+                    </button>
+                  )}
+                </button>
+                
+                <div className="text-center md:text-left">
+                  <h1 className="text-3xl md:text-4xl font-bold flex items-center gap-2">
+                    {userProfile.displayName}
+                    <BadgeCheck size={28} strokeWidth={2.2} className="text-indigo-600 drop-shadow-sm" />
+                  </h1>
+                  <p className="text-indigo-100 flex items-center justify-center md:justify-start mt-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    {userProfile.location}
+                  </p>
+                  <p className="text-indigo-100 mt-1">Member since {userProfile.joinedDate.toLocaleDateString()}</p>
+                  
+                  {!isOwnProfile && (
+                    <div className="flex items-center gap-4 mt-6">
+                      <button
+                        onClick={handleConnect}
+                        className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-lg text-indigo-700 bg-white hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 transition-all duration-300"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                        </svg>
+                        Connect with {userProfile.displayName.split(' ')[0]}
+                      </button>
+                      
+                      <button
+                        onClick={() => setShowEndorseModal(true)}
+                        className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-lg bg-indigo-600 text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 transition-all duration-300"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Endorse
+                      </button>
+                    </button>
+                  )}
+                </button>
+              </button>
+
+              <div className="mt-6 md:mt-0 text-center md:ml-8 flex flex-col gap-4 md:gap-6">
+                <button onClick={() => document.getElementById("endorsements-section")?.scrollIntoView({ behavior: "smooth" })} className="bg-white bg-opacity-10 rounded-lg p-4 backdrop-blur-sm focus:outline-none hover:bg-opacity-20 transition w-full" type="button" aria-label="View endorsements">
+                  <div className="text-3xl font-bold text-white mb-2">
+                    {endorsements.length > 0 
+                      ? (endorsements.reduce((acc, e) => acc + e.rating, 0) / endorsements.length).toFixed(1)
+                      : "0.0"
+                    }
+                  </button>
+                  <div className="flex items-center justify-center mb-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <svg
+                        key={star}
+                        className={`w-5 h-5 ${
+                          endorsements.length > 0 && star <= Math.round(endorsements.reduce((acc, e) => acc + e.rating, 0) / endorsements.length)
+                            ? 'text-yellow-400'
+                            : 'text-gray-300'
+                        }`}
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    ))}
+                  </button>
+                  <div className="text-white text-sm">
+                    {endorsements.length > 0 
+                      ? `${endorsements.length} ${endorsements.length === 1 ? 'endorsement' : 'endorsements'}`
+                      : "No Endorsements Yet"
+                    }
+                  </button>
+                </button>
+                
+                {/* Total Swaps count box */}
+                <div className="bg-white bg-opacity-10 rounded-lg p-4 backdrop-blur-sm flex flex-col items-center">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Repeat className="h-6 w-6 text-indigo-200" />
+                    <span className="text-2xl font-bold text-white">{totalSwapsCount}</span>
+                  </button>
+                  <div className="text-white text-sm">{totalSwapsCount === 1 ? 'Completed Swap' : 'Completed Swaps'}</button>
+                </button>
+                
+                {/* Connections count box */}
+                <button
+                  className="bg-white bg-opacity-10 rounded-lg p-4 backdrop-blur-sm flex flex-col items-center focus:outline-none hover:bg-opacity-20 transition"
+                  onClick={() => setConnectionsModalOpen(true)}
+                  type="button"
+                  aria-label="Show connections"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <LucideUsers className="h-6 w-6 text-indigo-200" />
+                    <span className="text-2xl font-bold text-white">{connectionsCount}</span>
+                  </button>
+                  <div className="text-white text-sm">{connectionsCount === 1 ? 'Connection' : 'Connections'}</button>
+                </button>
+              </button>
+            </button>
+          </button>
+        </button>
+        
+        {/* Endorsement Modal */}
+        {showEndorseModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+            <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-md relative animate-scaleup-avatar">
+              <button
+                className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+                onClick={() => setShowEndorseModal(false)}
+                aria-label="Close"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              
+              <h3 className="text-xl font-bold mb-4 text-gray-900">Endorse {userProfile.displayName}</h3>
+              
+              {completedSwaps.length === 0 ? (
+                <div className="text-center py-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-gray-600 mb-2">No completed swaps yet</p>
+                  <p className="text-sm text-gray-500">You need to complete a swap with {userProfile.displayName} before you can endorse them.</p>
+                </button>
+              ) : completedSwaps.every(swap => hasEndorsedSwap(swap.id)) ? (
+                <div className="text-center py-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <p className="text-gray-600 mb-2">All swaps endorsed!</p>
+                  <p className="text-sm text-gray-500">You have already endorsed all completed swaps with {userProfile.displayName}.</p>
+                </button>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Select Completed Swap
+                    </label>
+                    <select
+                      value={selectedSwap}
+                      onChange={(e) => setSelectedSwap(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      required
+                    >
+                      <option value="">Choose a swap...</option>
+                      {completedSwaps
+                        .filter(swap => !hasEndorsedSwap(swap.id))
+                        .map(swap => (
+                          <option key={swap.id} value={swap.id}>
+                            {swap.title} - {swap.completedAt.toLocaleDateString()}
+                          </option>
+                        ))}
+                    </select>
+                  </button>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Rate Your Experience
+                    </label>
+                    <div className="flex items-center space-x-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => setEndorsementRating(star)}
+                          onMouseEnter={() => setHoveredRating(star)}
+                          onMouseLeave={() => setHoveredRating(0)}
+                          className="focus:outline-none"
+                        >
+                          <svg
+                            className={`w-8 h-8 ${
+                              star <= (hoveredRating || endorsementRating)
+                                ? 'text-yellow-400'
+                                : 'text-gray-300'
+                            }`}
+                            fill="currentColor"
+                            viewBox="0 0 20 20"
+                          >
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                        </button>
+                      ))}
+                    </button>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {hoveredRating === 0
+                        ? endorsementRating === 0
+                          ? 'Select a rating'
+                          : `${endorsementRating} star${endorsementRating === 1 ? '' : 's'}`
+                        : `${hoveredRating} star${hoveredRating === 1 ? '' : 's'}`}
+                    </p>
+                  </button>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Describe Your Experience
+                    </label>
+                    <textarea
+                      value={endorsementReview}
+                      onChange={(e) => setEndorsementReview(e.target.value)}
+                      placeholder="Share your experience working with this person..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      rows={4}
+                      required
+                    />
+                  </button>
+                  
+                  <div className="flex justify-end gap-2 mt-6">
+                    <button
+                      onClick={() => setShowEndorseModal(false)}
+                      className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleEndorse}
+                      disabled={!selectedSwap || !endorsementReview.trim() || endorsementRating === 0 || isEndorsing}
+                      className={`px-4 py-2 text-sm font-medium rounded-md shadow-sm text-white ${
+                        !selectedSwap || !endorsementReview.trim() || endorsementRating === 0 || isEndorsing
+                          ? 'bg-indigo-400 cursor-not-allowed'
+                          : 'bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500'
+                      }`}
+                    >
+                      {isEndorsing ? 'Endorsing...' : 'Submit Endorsement'}
+                    </button>
+                  </button>
+                </button>
+              )}
+            </button>
+          </button>
+        )}
+
+        {/* About Me Section */}
+        <div  className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">About Me</h2>
+            <div className="prose max-w-none">
+              <p className="text-gray-700">{userProfile.bio}</p>
+              
+              {userProfile.skills && userProfile.skills.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Skills</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {userProfile.skills.map((skill, index) => (
+                      <span
+                        key={index}
+                        className="px-3 py-1 bg-indigo-100 text-indigo-800 rounded-full text-sm font-medium"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </button>
+                </button>
+              )}
+            </button>
+          </button>
+        </button>
+
+        {/* Feed Section */}
+        <div  className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Activity Feed</h2>
+              {isOwnProfile && (
+                <button
+                  onClick={() => setShowPostModal(true)}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                  <Plus className="h-5 w-5 mr-2" />
+                  New Post
+                </button>
+              )}
+            </button>
+
+            {feedLoading ? (
+              <div className="flex justify-center items-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-500"></button>
+              </button>
+            ) : feedPosts.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                No posts yet. {isOwnProfile ? "Share something with your network!" : "This user hasn't posted anything yet."}
+              </button>
+            ) : (
+              <div className={`space-y-6 pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 ${
+                feedPosts.length > 3 ? 'h-[600px] overflow-y-auto' : ''
+              }`}>
+                {feedPosts.map((post) => (
+                  <div key={post.id} id={`post-${post.id}`} className="border rounded-lg p-4 hover:shadow-md transition-all duration-200">
+                    <div className="flex items-start space-x-3">
+                      <Link href={`/profile/${post.userId}`} className="flex-shrink-0">
+                        <div className="h-10 w-10 rounded-full overflow-hidden">
+                          {post.photoURL ? (
+                            <Image
+                              src={post.photoURL}
+                              alt={post.displayName}
+                              width={40}
+                              height={40}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                              <span className="text-white text-lg font-medium">{post.displayName.charAt(0)}</span>
+                            </button>
+                          )}
+                        </button>
+                      </Link>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Link href={`/profile/${post.userId}`} className="font-semibold text-gray-900 hover:text-indigo-600">
+                              {post.displayName}
+                            </Link>
+                            <p className="text-sm text-gray-500">
+                              {post.createdAt && typeof post.createdAt.toDate === 'function' ? post.createdAt.toDate().toLocaleDateString() : ''}
+                            </p>
+                          </button>
+                          {(user && post.userId === user.uid) && (
+                            <button
+                              onClick={() => handleDeletePost(post)}
+                              className="text-gray-400 hover:text-red-500"
+                            >
+                              <Trash2 className="h-5 w-5" />
+                            </button>
+                          )}
+                        </button>
+                        <p className="mt-2 text-gray-700 whitespace-pre-wrap">{post.content}</p>
+                        
+                        {post.imageUrl && (
+                          <div className="mt-3 relative h-64 rounded-lg overflow-hidden">
+                            <Image
+                              src={post.imageUrl}
+                              alt="Post image"
+                              fill
+                              className="object-cover"
+                              onClick={() => setMaximizedImage(post.imageUrl)}
+                            />
+                          </button>
+                        )}
+
+                        {post.linkPreview && (
+                          <div className="mt-3 border rounded-lg overflow-hidden">
+                            <a
+                              href={post.linkPreview.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block hover:bg-gray-50"
+                            >
+                              <div className="p-4">
+                                <h4 className="font-medium text-gray-900">{post.linkPreview.title}</h4>
+                                <p className="text-sm text-gray-500 mt-1">{post.linkPreview.description}</p>
+                              </button>
+                              {post.linkPreview.image && (
+                                <div className="relative h-48">
+                                  <Image
+                                    src={post.linkPreview.image}
+                                    alt={post.linkPreview.title}
+                                    fill
+                                    className="object-cover"
+                                  />
+                                </button>
+                              )}
+                            </a>
+                          </button>
+                        )}
+
+                        <div className="mt-4 flex items-center space-x-4">
+                          <button
+                            onClick={() => handleLike(post.id)}
+                            className={`flex items-center space-x-1 ${
+                              post.likes?.includes(user?.uid) ? 'text-indigo-600' : 'text-gray-500 hover:text-indigo-600'
+                            }`}
+                          >
+                            <ThumbsUp className="h-5 w-5" />
+                            <span>{post.likes?.length || 0}</span>
+                          </button>
+
+                          <div className="flex items-center space-x-2">
+                            {Object.entries(post.emoji || {}).map(([emoji, userIds]) => {
+                              const typedUserIds = userIds as string[];
+                              return (
+                                <button
+                                  key={emoji}
+                                  onClick={() => handleEmoji(post.id, emoji)}
+                                  className={`flex items-center space-x-1 px-2 py-1 rounded-full ${
+                                    typedUserIds.includes(user?.uid || '') ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  <span>{emoji}</span>
+                                  <span className="text-sm">{typedUserIds.length}</span>
+                                </button>
+                              );
+                            })}
+                            <div className="relative">
+                              <button
+                                onClick={() => setShowEmojiPicker(prev => ({ ...prev, [post.id]: !prev[post.id] }))}
+                                className="text-gray-500 hover:text-indigo-600 transition-colors duration-200"
+                              >
+                                <Smile className="h-5 w-5" />
+                              </button>
+                              {showEmojiPicker[post.id] && (
+                                <div className="absolute z-10 mt-2 bg-white rounded-xl shadow-lg border border-gray-100 p-3 w-64">
+                                  <div className="grid grid-cols-4 gap-2">
+                                    {emojiList.map((emoji) => (
+                                      <button
+                                        key={emoji}
+                                        onClick={() => handleEmoji(post.id, emoji)}
+                                        className="p-2 hover:bg-indigo-50 rounded-lg transition-colors duration-200 flex items-center justify-center text-xl hover:scale-110 transform"
+                                      >
+                                        {emoji}
+                                      </button>
+                                    ))}
+                                  </button>
+                                </button>
+                              )}
+                            </button>
+                          </button>
+
+                          <button
+                            onClick={() => setShowComments(prev => ({ ...prev, [post.id]: !prev[post.id] }))}
+                            className="text-gray-500 hover:text-indigo-600 font-medium"
+                          >
+                            Comments ({post.comments?.length || 0})
+                          </button>
+                        </button>
+
+                        {showComments[post.id] && (
+                          <div className="mt-4 space-y-4">
+                            {post.comments?.slice(0, showAllComments[post.id] ? undefined : 3).map((comment: Comment) => (
+                              <div key={comment.id} className="flex space-x-3">
+                                <Link href={`/profile/${comment.userId}`} className="flex-shrink-0">
+                                  <div className="h-8 w-8 rounded-full overflow-hidden">
+                                    {comment.photoURL ? (
+                                      <Image
+                                        src={comment.photoURL}
+                                        alt={comment.displayName}
+                                        width={32}
+                                        height={32}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                                        <span className="text-white text-sm font-medium">{comment.displayName.charAt(0)}</span>
+                                      </button>
+                                    )}
+                                  </button>
+                                </Link>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between">
+                                    <div>
+                                      <Link href={`/profile/${comment.userId}`} className="font-semibold text-gray-900 hover:text-indigo-600">
+                                        {comment.displayName}
+                                      </Link>
+                                      <p className="text-sm text-gray-500">
+                                        {comment.createdAt && typeof comment.createdAt.toDate === 'function' ? comment.createdAt.toDate().toLocaleDateString() : ''}
+                                      </p>
+                                    </button>
+                                    {(user && comment.userId === user.uid) && (
+                                      <button
+                                        onClick={() => handleDeleteComment(post.id, comment.id)}
+                                        className="text-gray-400 hover:text-red-500"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    )}
+                                  </button>
+                                  <p className="mt-1 text-gray-700">{comment.text}</p>
+                                  
+                                  <div className="mt-2 flex items-center space-x-4">
+                                    <button
+                                      onClick={() => handleLikeComment(post.id, comment.id)}
+                                      className={`flex items-center space-x-1 ${
+                                        user?.uid && comment.likes?.includes(user.uid) ? 'text-indigo-600' : 'text-gray-500 hover:text-indigo-600'
+                                      }`}
+                                    >
+                                      <ThumbsUp className="h-4 w-4" />
+                                      <span className="text-sm">{comment.likes?.length || 0}</span>
+                                    </button>
+
+                                    <div className="flex items-center space-x-2">
+                                      {Object.entries(comment.emoji || {}).map(([emoji, userIds]) => {
+                                        const typedUserIds = userIds as string[];
+                                        return (
+                                          <button
+                                            key={emoji}
+                                            onClick={() => handleCommentEmoji(post.id, comment.id, emoji)}
+                                            className={`flex items-center space-x-1 px-2 py-1 rounded-full ${
+                                              typedUserIds.includes(user?.uid || '') ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                            }`}
+                                          >
+                                            <span>{emoji}</span>
+                                            <span className="text-sm">{typedUserIds.length}</span>
+                                          </button>
+                                        );
+                                      })}
+                                      <div className="relative">
+                                        <button
+                                          onClick={() => setShowCommentEmojiPicker(prev => ({ ...prev, [comment.id]: !prev[comment.id] }))}
+                                          className="text-gray-500 hover:text-indigo-600"
+                                        >
+                                          <Smile className="h-4 w-4" />
+                                        </button>
+                                        {showCommentEmojiPicker[comment.id] && (
+                                          <div className="absolute z-10 top-6 left-0 bg-white rounded-xl shadow-lg border border-gray-100 p-3 w-48">
+                                            <div className="grid grid-cols-3 gap-2">
+                                              {emojiList.map((emoji) => (
+                                                <button
+                                                  key={emoji}
+                                                  onClick={() => handleCommentEmoji(post.id, comment.id, emoji)}
+                                                  className="p-2 hover:bg-indigo-50 rounded-lg transition-colors duration-200 flex items-center justify-center text-xl hover:scale-110 transform"
+                                                >
+                                                  {emoji}
+                                                </button>
+                                              ))}
+                                            </button>
+                                          </button>
+                                        )}
+                                      </button>
+                                    </button>
+
+                                    <button
+                                      onClick={() => setShowReplyBox(prev => ({ ...prev, [comment.id]: !prev[comment.id] }))}
+                                      className="text-gray-500 hover:text-indigo-600 text-sm"
+                                    >
+                                      Reply
+                                    </button>
+                                  </button>
+
+                                  {showReplyBox[comment.id] && (
+                                    <div className="mt-2">
+                                      <textarea
+                                        value={replyInputs[comment.id] || ''}
+                                        onChange={(e) => setReplyInputs(prev => ({ ...prev, [comment.id]: e.target.value }))}
+                                        onKeyPress={(e) => handleKeyPress(e, post.id, comment.id)}
+                                        placeholder="Write a reply..."
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                        rows={2}
+                                      />
+                                      <div className="mt-2 flex justify-end">
+                                        <button
+                                          onClick={() => handleAddReply(post.id, comment.id)}
+                                          disabled={!replyInputs[comment.id]?.trim()}
+                                          className={`px-4 py-2 text-sm font-medium rounded-md shadow-sm text-white ${
+                                            !replyInputs[comment.id]?.trim()
+                                              ? 'bg-indigo-400 cursor-not-allowed'
+                                              : 'bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500'
+                                          }`}
+                                        >
+                                          Post Reply
+                                        </button>
+                                      </button>
+                                    </button>
+                                  )}
+
+                                  {comment.replies && comment.replies.length > 0 && (
+                                    <div className="mt-2 space-y-2">
+                                      {comment.replies.map((reply: Reply) => (
+                                        <div key={reply.id} className="flex space-x-3 pl-8">
+                                          <Link href={`/profile/${reply.userId}`} className="flex-shrink-0">
+                                            <div className="h-6 w-6 rounded-full overflow-hidden">
+                                              {reply.photoURL ? (
+                                                <Image
+                                                  src={reply.photoURL}
+                                                  alt={reply.displayName}
+                                                  width={24}
+                                                  height={24}
+                                                  className="h-full w-full object-cover"
+                                                />
+                                              ) : (
+                                                <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                                                  <span className="text-white text-xs font-medium">{reply.displayName.charAt(0)}</span>
+                                                </button>
+                                              )}
+                                            </button>
+                                          </Link>
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between">
+                                              <div>
+                                                <Link href={`/profile/${reply.userId}`} className="font-semibold text-gray-900 hover:text-indigo-600">
+                                                  {reply.displayName}
+                                                </Link>
+                                                <p className="text-sm text-gray-500">
+                                                  {reply.createdAt && typeof reply.createdAt.toDate === 'function' ? reply.createdAt.toDate().toLocaleDateString() : ''}
+                                                </p>
+                                              </button>
+                                              {(user && reply.userId === user.uid) && (
+                                                <button
+                                                  onClick={() => handleDeleteReply(post.id, comment.id, reply.id)}
+                                                  className="text-gray-400 hover:text-red-500"
+                                                >
+                                                  <Trash2 className="h-3 w-3" />
+                                                </button>
+                                              )}
+                                            </button>
+                                            <p className="mt-1 text-gray-700">{reply.text}</p>
+                                            
+                                            <div className="mt-2 flex items-center space-x-3">
+                                              <button
+                                                onClick={() => handleLikeReply(post.id, comment.id, reply.id)}
+                                                className={`flex items-center space-x-1 ${
+                                                  user?.uid && reply.likes?.includes(user.uid) ? 'text-indigo-600' : 'text-gray-500 hover:text-indigo-600'
+                                                }`}
+                                              >
+                                                <ThumbsUp className="h-3 w-3" />
+                                                <span className="text-xs">{reply.likes?.length || 0}</span>
+                                              </button>
+
+                                              <div className="flex items-center space-x-2">
+                                                {Object.entries(reply.emoji || {}).map(([emoji, userIds]) => {
+                                                  const typedUserIds = userIds as string[];
+                                                  return (
+                                                    <button
+                                                      key={emoji}
+                                                      onClick={() => handleReplyEmoji(post.id, comment.id, reply.id, emoji)}
+                                                      className={`flex items-center space-x-1 px-1.5 py-0.5 rounded-full ${
+                                                        typedUserIds.includes(user?.uid || '') ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                      }`}
+                                                    >
+                                                      <span>{emoji}</span>
+                                                      <span className="text-xs">{typedUserIds.length}</span>
+                                                    </button>
+                                                  );
+                                                })}
+                                                <div className="relative">
+                                                  <button
+                                                    onClick={() => setShowReplyEmojiPicker(prev => ({ ...prev, [reply.id]: !prev[reply.id] }))}
+                                                    className="text-gray-500 hover:text-indigo-600"
+                                                  >
+                                                    <Smile className="h-3 w-3" />
+                                                  </button>
+                                                  {showReplyEmojiPicker[reply.id] && (
+                                                    <div className="absolute z-10 top-5 left-0 bg-white rounded-xl shadow-lg border border-gray-100 p-2 w-40">
+                                                      <div className="grid grid-cols-3 gap-1">
+                                                        {emojiList.map((emoji) => (
+                                                          <button
+                                                            key={emoji}
+                                                            onClick={() => handleReplyEmoji(post.id, comment.id, reply.id, emoji)}
+                                                            className="p-1.5 hover:bg-indigo-50 rounded-lg transition-colors duration-200 flex items-center justify-center text-sm hover:scale-110 transform"
+                                                          >
+                                                            {emoji}
+                                                          </button>
+                                                        ))}
+                                                      </button>
+                                                    </button>
+                                                  )}
+                                                </button>
+                                              </button>
+                                            </button>
+                                          </button>
+                                        </button>
+                                      ))}
+                                    </button>
+                                  )}
+                                </button>
+                              </button>
+                            ))}
+
+                            {post.comments?.length > 3 && !showAllComments[post.id] && (
+                              <button
+                                onClick={() => setShowAllComments(prev => ({ ...prev, [post.id]: true }))}
+                                className="text-indigo-600 hover:text-indigo-700 text-sm font-medium"
+                              >
+                                View All Comments ({post.comments.length})
+                              </button>
+                            )}
+
+                            {user && (
+                              <div className="mt-4">
+                                <textarea
+                                  value={commentInputs[post.id] || ''}
+                                  onChange={(e) => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
+                                  onKeyPress={(e) => handleKeyPress(e, post.id)}
+                                  placeholder="Write a comment..."
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                  rows={2}
+                                />
+                                <div className="mt-2 flex justify-end">
+                                  <button
+                                    onClick={() => handleAddComment(post.id)}
+                                    disabled={!commentInputs[post.id]?.trim()}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md shadow-sm text-white ${
+                                      !commentInputs[post.id]?.trim()
+                                        ? 'bg-indigo-400 cursor-not-allowed'
+                                        : 'bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500'
+                                    }`}
+                                  >
+                                    Post Comment
+                                  </button>
+                                </button>
+                              </button>
+                            )}
+                          </button>
+                        )}
+                      </button>
+                    </button>
+                  </button>
+                ))}
+              </button>
+            )}
+          </button>
+        </button>
+
+        {/* Portfolio section */}
+        {userProfile.portfolio && userProfile.portfolio.length > 0 && (
+          <div  className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="bg-white rounded-xl shadow-md p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Portfolio</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {userProfile.portfolio.map((item, index) => (
+                  <div 
+                    key={index} 
+                    className="border rounded-lg overflow-hidden hover:shadow-lg transition-all duration-300 cursor-pointer group"
+                    onClick={() => setMaximizedImage(item.imageUrl)}
+                  >
+                    <div className="relative h-48 overflow-hidden">
+                      <Image
+                        src={item.imageUrl}
+                        alt={item.title}
+                        fill
+                        className="object-cover transform group-hover:scale-110 transition-transform duration-300"
+                      />
+                    </button>
+                    <div className="p-4">
+                      <h3 className="font-semibold text-lg text-gray-900 mb-2">{item.title}</h3>
+                      <p className="text-gray-600 text-sm">{item.description}</p>
+                    </button>
+                  </button>
+                ))}
+              </button>
+            </button>
+          </button>
+        )}
+
+        {/* What My Swappers are Saying section */}
+        {endorsements.length > 0 && (
+          <div  className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="bg-white rounded-xl shadow-md p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-8 text-center">What My Swappers are Saying</h2>
+              
+              <div className="relative">
+                <button
+                  onClick={handlePrevReviews}
+                  disabled={currentReviewIndex === 0}
+                  className={`absolute left-0 top-1/2 transform -translate-y-1/2 z-10 p-2 rounded-full ${
+                    currentReviewIndex === 0
+                      ? 'text-gray-300 cursor-not-allowed'
+                      : 'text-gray-600 hover:text-indigo-600'
+                  }`}
+                >
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-12">
+                  {endorsements.slice(currentReviewIndex, currentReviewIndex + reviewsPerPage).map(endorsement => (
+                    <div key={endorsement.id} className="bg-white rounded-lg p-6 hover:shadow-lg transition-all duration-200">
+                      <div className="flex items-center mb-4">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <svg
+                            key={star}
+                            className={`w-5 h-5 ${
+                              star <= endorsement.rating ? 'text-yellow-400' : 'text-gray-200'
+                            }`}
+                            fill="currentColor"
+                            viewBox="0 0 20 20"
+                          >
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                        ))}
+                      </button>
+                      
+                      <p className="text-gray-700 mb-4">{endorsement.review}</p>
+                      
+                      <div className="flex items-center">
+                        <Link href={`/profile/${endorsement.fromUserId}`} className="flex-shrink-0">
+                          <div className="h-10 w-10 rounded-full overflow-hidden mr-3">
+                            {endorsement.fromUserPhoto ? (
+                              <Image
+                                src={endorsement.fromUserPhoto}
+                                alt={endorsement.fromUserName}
+                                width={40}
+                                height={40}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="h-full w-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center">
+                                <span className="text-white text-lg font-medium">
+                                  {endorsement.fromUserName.charAt(0)}
+                                </span>
+                              </button>
+                            )}
+                          </button>
+                        </Link>
+                        <div className="flex-1">
+                          <Link
+                            href={`/profile/${endorsement.fromUserId}`}
+                            className="font-semibold text-indigo-600 hover:text-indigo-700 block"
+                          >
+                            {endorsement.fromUserName}
+                          </Link>
+                          <span className="text-sm text-gray-500">
+                            {endorsement.createdAt.toLocaleDateString()}
+                          </span>
+                        </button>
+                      </button>
+                    </button>
+                  ))}
+                </button>
+
+                <button
+                  onClick={handleNextReviews}
+                  disabled={currentReviewIndex + reviewsPerPage >= endorsements.length}
+                  className={`absolute right-0 top-1/2 transform -translate-y-1/2 z-10 p-2 rounded-full ${
+                    currentReviewIndex + reviewsPerPage >= endorsements.length
+                      ? 'text-gray-300 cursor-not-allowed'
+                      : 'text-gray-600 hover:text-indigo-600'
+                  }`}
+                >
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </button>
+            </button>
+          </button>
+        )}
+
+        {/* Services section */}
+        {userServices.length > 0 && (
+          <div  className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="bg-white rounded-xl shadow-md p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Live Services</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {userServices.map((service) => (
+                  <div 
+                    key={service.id} 
+                    className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-all duration-300"
+                  >
+                    {service.images && service.images.length > 0 && (
+                      <div className="relative h-48 overflow-hidden">
+                        <Image
+                          src={service.images[0]}
+                          alt={service.title}
+                          fill
+                          className="object-cover transform group-hover:scale-110 transition-transform duration-300"
+                        />
+                      </button>
+                    )}
+                    <div className="p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-semibold text-lg text-gray-900 truncate">{service.title}</h3>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(service.category)}`}>
+                          {service.category}
+                        </span>
+                      </button>
+                      <p className="text-gray-600 text-sm mb-4 line-clamp-2">{service.description}</p>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center text-sm text-gray-500">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                          {service.location}
+                        </button>
+                        {isOwnProfile ? (
+                          <Link
+                            href={`/dashboard/services/${service.id}/edit`}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Edit Service
+                          </Link>
+                        ) : (
+                          <Link
+                            href={`/marketplace/swap?serviceId=${service.id}`}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Initiate Swap
+                          </Link>
+                        )}
+                      </button>
+                    </button>
+                  </button>
+                ))}
+              </button>
+            </button>
+          </button>
+        )}
+        
+        {/* Image maximization modal */}
+        {maximizedImage && (
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75"
+            onClick={() => setMaximizedImage(null)}
+          >
+            <div className="relative max-w-4xl max-h-[90vh] w-full h-full">
+              <Image
+                src={maximizedImage}
+                alt="Maximized image"
+                fill
+                className="object-contain"
+              />
+              <button
+                className="absolute top-4 right-4 text-white hover:text-gray-300"
+                onClick={() => setMaximizedImage(null)}
+              >
+                <svg className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </button>
+          </button>
+        )}
+
+        {/* New Post Modal */}
+        {showPostModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-2xl mx-4 animate-appear">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-gray-900">Create New Post</h3>
+                <button
+                  onClick={() => setShowPostModal(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                  aria-label="Close"
+                >
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </button>
+              
+              <form onSubmit={handlePostSubmit}>
+                <div className="mb-4">
+                  <textarea
+                    value={newPostContent}
+                    onChange={(e) => setNewPostContent(e.target.value)}
+                    placeholder="What's on your mind?"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    rows={4}
+                  />
+                </button>
+                
+                {newPostImagePreview && (
+                  <div className="relative mb-4">
+                    <Image
+                      src={newPostImagePreview}
+                      alt="Preview"
+                      width={400}
+                      height={300}
+                      className="max-h-60 rounded-lg object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewPostImage(null);
+                        setNewPostImagePreview(null);
+                      }}
+                      className="absolute top-2 right-2 bg-black bg-opacity-50 rounded-full p-1 text-white hover:bg-opacity-70"
+                    >
+                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </button>
+                )}
+                
+                {newPostLinkPreview && (
+                  <div className="mb-4 border rounded-lg overflow-hidden">
+                    <div className="p-3">
+                      <h4 className="font-medium text-gray-900">{newPostLinkPreview.title}</h4>
+                      <p className="text-sm text-gray-500 mt-1">{newPostLinkPreview.description}</p>
+                    </button>
+                    {newPostLinkPreview.image && (
+                      <div className="relative h-40">
+                        <Image
+                          src={newPostLinkPreview.image}
+                          alt={newPostLinkPreview.title}
+                          fill
+                          className="object-cover"
+                        />
+                      </button>
+                    )}
+                  </button>
+                )}
+                
+                <div className="flex justify-between items-center">
+                  <label className="flex items-center text-indigo-600 hover:text-indigo-700 cursor-pointer">
+                    <LucideImage className="h-5 w-5 mr-2" />
+                    <span className="text-sm font-medium">Add Image</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="hidden"
+                    />
+                  </label>
+                  
+                  <button
+                    type="submit"
+                    disabled={(!newPostContent.trim() && !newPostImage) || posting}
+                    className={`px-4 py-2 rounded-md text-white font-medium ${
+                      (!newPostContent.trim() && !newPostImage) || posting
+                        ? 'bg-indigo-400 cursor-not-allowed'
+                        : 'bg-indigo-600 hover:bg-indigo-700'
+                    }`}
+                  >
+                    {posting ? 'Posting...' : 'Post'}
+                  </button>
+                </button>
+              </form>
+            </button>
+          </button>
+        )}
+
+        {/* Delete Post Confirmation Modal */}
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md mx-4">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Delete Post</h3>
+              <p className="text-gray-500 mb-6">Are you sure you want to delete this post? This action cannot be undone.</p>
+              
+              <div className="flex justify-end gap-4">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-4 py-2 text-gray-700 hover:text-gray-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeletePost}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </button>
+            </button>
+          </button>
+        )}
+
+        {/* Connections Modal */}
+        {connectionsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+            <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-lg relative animate-scaleup-avatar max-h-[80vh] overflow-y-auto">
+              <button
+                className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+                onClick={() => setConnectionsModalOpen(false)}
+                aria-label="Close"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <h3 className="text-xl font-bold mb-4 text-gray-900 flex items-center gap-2">
+                <LucideUsers className="h-6 w-6 text-indigo-600" /> Connections
+              </h3>
+              {/* Tabs */}
+              <div className="flex gap-2 mb-6">
+                <button
+                  className={`px-4 py-2 rounded-t-lg font-semibold focus:outline-none transition border-b-2 ${connectionsTab === 'all' ? 'border-indigo-600 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 bg-gray-100 hover:bg-indigo-50'}`}
+                  onClick={() => setConnectionsTab('all')}
+                  type="button"
+                >
+                  All Connections
+                </button>
+                <button
+                  className={`px-4 py-2 rounded-t-lg font-semibold focus:outline-none transition border-b-2 ${connectionsTab === 'mutual' ? 'border-indigo-600 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 bg-gray-100 hover:bg-indigo-50'} ${!user ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  onClick={() => user && setConnectionsTab('mutual')}
+                  type="button"
+                  disabled={!user}
+                >
+                  Mutual Connections
+                </button>
+              </button>
+              {/* Tab Content */}
+              {connectionsTab === 'mutual' ? (
+                user ? (
+                  mutualConnections.length > 0 ? (
+                    <div className="flex flex-col gap-3">
+                      {mutualConnections.map(uid => {
+                        const info = connectionsUserInfo[uid];
+                        if (!info) return null;
+                        const isViewer = user && user.uid === uid;
+                        const alreadyConnected = user && viewerConnections.some(conn => conn.users.includes(uid));
+                        return (
+                          <div key={uid} className="flex items-center gap-3 bg-indigo-50 rounded-lg px-3 py-2">
+                            <Image src={info.photoURL || '/default-avatar.png'} alt={info.displayName || 'User'} width={40} height={40} className="rounded-full object-cover" />
+                            <div className="flex-1 min-w-0">
+                              <span className="font-medium text-indigo-900">{info.displayName || 'User'}</span>
+                              <span className="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">Mutual</span>
+                            </button>
+                            {!isViewer && user && (
+                              alreadyConnected ? (
+                                <button className="flex items-center gap-1 px-3 py-1 rounded bg-green-100 text-green-700 text-xs font-semibold cursor-default" disabled>
+                                  <UserCheck className="h-4 w-4" /> Connected
+                                </button>
+                              ) : (
+                                <button
+                                  className="flex items-center gap-1 px-3 py-1 rounded bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition disabled:opacity-60"
+                                  onClick={() => handleConnectWithConnection(uid)}
+                                  disabled={!!connectingId}
+                                >
+                                  {connectingId === uid ? (
+                                    <span className="animate-spin h-4 w-4 mr-1 border-t-2 border-b-2 border-white rounded-full"></span>
+                                  ) : (
+                                    <UserPlus className="h-4 w-4" />
+                                  )}
+                                  Connect
+                                </button>
+                              )
+                            )}
+                            {isViewer && user && (
+                              <span className="text-xs text-gray-400">You</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </button>
+                  ) : (
+                    <div className="text-gray-500 text-center">No mutual connections.</button>
+                  )
+                ) : (
+                  <div className="text-gray-400 text-center py-8">Sign in to see mutual connections.</button>
+                )
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {profileConnections.length === 0 && (
+                    <div className="text-gray-500 text-center">No connections yet.</button>
+                  )}
+                  {profileConnections.flatMap(conn => conn.users.filter((id: string) => id !== userId)).map(uid => {
+                    const info = connectionsUserInfo[uid];
+                    if (!info) return null;
+                    const isMutual = user && mutualConnections.includes(uid);
+                    const isViewer = user && user.uid === uid;
+                    const alreadyConnected = user && viewerConnections.some(conn => conn.users.includes(uid));
+                    return (
+                      <div key={uid} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2">
+                        <Image src={info.photoURL || '/default-avatar.png'} alt={info.displayName || 'User'} width={40} height={40} className="rounded-full object-cover" />
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-gray-900">{info.displayName || 'User'}</span>
+                          {isMutual && <span className="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">Mutual</span>}
+                        </button>
+                        {!isViewer && user && (
+                          alreadyConnected ? (
+                            <button className="flex items-center gap-1 px-3 py-1 rounded bg-green-100 text-green-700 text-xs font-semibold cursor-default" disabled>
+                              <UserCheck className="h-4 w-4" /> Connected
+                            </button>
+                          ) : (
+                            <button
+                              className="flex items-center gap-1 px-3 py-1 rounded bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition disabled:opacity-60"
+                              onClick={() => handleConnectWithConnection(uid)}
+                              disabled={!!connectingId}
+                            >
+                              {connectingId === uid ? (
+                                <span className="animate-spin h-4 w-4 mr-1 border-t-2 border-b-2 border-white rounded-full"></span>
+                              ) : (
+                                <UserPlus className="h-4 w-4" />
+                              )}
+                              Connect
+                            </button>
+                          )
+                        )}
+                        {isViewer && user && (
+                          <span className="text-xs text-gray-400">You</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </button>
+              )}
+            </button>
+          </button>
+        )}
+      </button>
+    </>
+  );
+}

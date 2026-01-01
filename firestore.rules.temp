@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Temporary rules to get started - CHANGE THESE IN PRODUCTION!
+    // Allow read/write access to all users to all collections for development
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+} 
